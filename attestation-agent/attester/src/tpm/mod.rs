@@ -7,13 +7,14 @@ use super::{Attester, InitDataResult, TeeEvidence};
 pub mod utils;
 
 use self::utils::{
-    detect_tpm_device, extend_pcr, get_ak_handle, get_quote, read_ak_public_key, read_all_pcrs,
-    TpmQuote,
+    detect_tpm_device, extend_pcr, get_ak_handle, read_ak_public_key, read_all_pcrs,
 };
+use crate::tpm_utils::{get_quote, generate_rsa_ak, TpmQuote};
 use anyhow::{anyhow, Result};
 use base64::Engine;
 use log::info;
 use serde::{Deserialize, Serialize};
+use tss_esapi::traits::Marshall;
 
 const PCR_SLOT_8: u64 = 8;
 const TPM_REPORT_DATA_SIZE: usize = 64;
@@ -61,21 +62,21 @@ pub fn detect_platform() -> bool {
 #[async_trait::async_trait]
 impl Attester for TpmAttester {
     /// Get evidence for the TPM attester.
-    async fn get_evidence(&self, mut report_data: Vec<u8>) -> Result<TeeEvidence> {
-        // Ensure report_data is exactly 64 bytes,
-        // truncating if longer or padding with zeros if shorter
-        report_data.resize(TPM_REPORT_DATA_SIZE, 0);
-        let ak_public_bytes = read_ak_public_key(&self.tpm_device, self.ak_handle_raw)?;
-        let tpm_quote = get_quote(
-            &self.tpm_device,
-            self.ak_handle_raw,
-            &report_data,
-            TPM_HASH_ALGORITHM,
-        )?;
-
+    async fn get_evidence(&self, report_data: Vec<u8>) -> Result<TeeEvidence> {
+        let tpm_device = detect_tpm_device().ok_or_else(|| anyhow!("No TPM device found"))?;
+        info!("[TPM Attester] Using TPM device: {}", tpm_device);
+        std::env::set_var("TCTI", format!("device:{}", tpm_device));
+        let data = if report_data.len() > 64 {
+            &report_data[..64]
+        } else {
+            &report_data
+        };
+        let attestation_key = generate_rsa_ak()?;
+        let public = attestation_key.ak_public.marshall()?;
+        let tpm_quote = get_quote(attestation_key, data, "SHA256")?;
         let evidence = Evidence {
             tpm_quote,
-            ak_public: base64::engine::general_purpose::STANDARD.encode(ak_public_bytes),
+            ak_public: base64::engine::general_purpose::STANDARD.encode(public),
         };
         Ok(serde_json::to_value(&evidence)?)
     }

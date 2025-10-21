@@ -47,6 +47,8 @@ hyper-tls = { version = "0.5", optional = true }
 tokio = { version = "1", features = ["full"], optional = true }
 tempfile = { workspace = true, optional = true }
 env_logger = "0.11"
+openssl.workspace = true
+rsa = { version = "0.9.6", features = ["pkcs5", "sha2"]}
 num-traits = { version = "0.2" }
 picky-asn1 = { version = "0.10.1", optional = true }
 picky-asn1-der = { version = "0.5.2", optional = true }

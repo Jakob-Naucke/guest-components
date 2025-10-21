@@ -6,20 +6,14 @@
 use anyhow::Context;
 use anyhow::*;
 use base64::Engine;
-use num_traits::cast::FromPrimitive;
-use openssl::x509::X509;
-use rsa as rust_rsa;
 use serde::{Deserialize, Serialize};
 use std::env;
 use std::str::FromStr;
 use tss_esapi::attributes::SessionAttributesBuilder;
 use tss_esapi::constants::SessionType;
-use tss_esapi::handles::PcrHandle;
 use tss_esapi::interface_types::algorithm::{
     AsymmetricAlgorithm, HashingAlgorithm, SignatureSchemeAlgorithm,
 };
-use tss_esapi::interface_types::key_bits::RsaKeyBits;
-use tss_esapi::structures::digest_values::DigestValues;
 use tss_esapi::structures::{
     pcr_selection_list::PcrSelectionListBuilder, pcr_slot::PcrSlot, AttestInfo, PcrSelectionList,
     Private, Public, Signature, SignatureScheme as TpmSignatureScheme, SymmetricDefinition,
@@ -30,10 +24,9 @@ use tss_esapi::Context as TssContext;
 use tss_esapi::{
     abstraction::{
         ak::{create_ak, load_ak},
-        ek::{create_ek_object, retrieve_ek_pubcert},
+        ek::create_ek_object,
         pcr,
-        public::DecodedKey,
-        AsymmetricAlgorithmSelection, DefaultKey,
+        DefaultKey,
     },
     structures::HashScheme,
 };
@@ -120,33 +113,6 @@ pub fn create_pcr_selection_list(algorithm: &str) -> Result<PcrSelectionList> {
             .context("PCR selection list build failed"),
         _ => bail!("Unsupported PCR Hash Algorithm"),
     }
-}
-
-// Extend a PCR with the given digest at the given index.
-pub fn extend_pcr(digest: Vec<u8>, index: u64) -> Result<()> {
-    let mut ctx = create_ctx_with_session()?;
-
-    if index >= TPM_QUOTE_PCR_SLOTS.len() as u64 {
-        bail!("PCR index out of bounds");
-    }
-
-    // Must be SHA-256 digest
-    if digest.len() != 32 {
-        bail!("Event digest length is not 32 bytes");
-    }
-
-    let pcr_handle = PcrHandle::from_u64(index).ok_or_else(|| anyhow!("Invalid pcr index"))?;
-    let mut digest_values = DigestValues::new();
-    digest_values.set(
-        HashingAlgorithm::Sha256,
-        digest
-            .try_into()
-            .map_err(|_| anyhow!("Failed to convert digest"))?,
-    );
-
-    ctx.pcr_extend(pcr_handle, digest_values)?;
-
-    Ok(())
 }
 
 // Read all PCRs for the given algorithm.
@@ -245,71 +211,4 @@ pub fn get_quote(
         message: engine.encode(attest.marshall()?),
         pcrs: read_all_pcrs(pcr_algorithm)?,
     })
-}
-
-pub fn get_ak_pub(ak: AttestationKey) -> Result<rust_rsa::RsaPublicKey> {
-    let mut context = create_ctx_without_session()?;
-    let ek_handle = create_ek_object(&mut context, AsymmetricAlgorithm::Rsa, DefaultKey)?;
-    let key_handle = load_ak(
-        &mut context,
-        ek_handle,
-        None,
-        ak.clone().ak_private,
-        ak.clone().ak_public,
-    )?;
-    let (pk, _, _) = context.read_public(key_handle)?;
-
-    let decoded_key: DecodedKey = pk.try_into()?;
-    let DecodedKey::RsaPublicKey(rsa_pk) = decoded_key else {
-        bail!("unexpected key type");
-    };
-
-    let bytes = rsa_pk.modulus.as_unsigned_bytes_be();
-    let n = rust_rsa::BigUint::from_bytes_be(bytes);
-    let bytes = rsa_pk.public_exponent.as_unsigned_bytes_be();
-    let e = rust_rsa::BigUint::from_bytes_be(bytes);
-
-    let pkey = rust_rsa::RsaPublicKey::new(n, e)?;
-    Ok(pkey)
-}
-
-pub fn dump_ek_cert_pem() -> Result<String> {
-    let mut context = create_ctx_without_session()?;
-
-    let ek_cert_bytes = retrieve_ek_pubcert(
-        &mut context,
-        AsymmetricAlgorithmSelection::Rsa(RsaKeyBits::Rsa2048),
-    )?;
-    let ek_cert_x509 = X509::from_der(&ek_cert_bytes)?;
-    let ek_cert_pem_bytes = ek_cert_x509.to_pem()?;
-    let ek_cert = String::from_utf8(ek_cert_pem_bytes)?;
-
-    Ok(ek_cert)
-}
-
-/// Detect the TPM device to use.
-///
-/// Priority:
-/// 1. If the TPM_DEVICE environment variable is set, use that.
-/// 2. If /dev/tpm0 exists, use that.
-/// 3. If /dev/tpm1 exists, use that.
-/// 4. Otherwise, return None.
-pub fn detect_tpm_device() -> Option<String> {
-    if let Result::Ok(dev) = std::env::var("TPM_DEVICE") {
-        if std::path::Path::new(&dev).exists() {
-            log::info!("TPM device detected from TPM_DEVICE env: {}", dev);
-            return Some(dev);
-        } else {
-            log::warn!("TPM_DEVICE env set to '{}', but device does not exist", dev);
-        }
-    }
-    let candidates = ["/dev/tpm0", "/dev/tpm1"];
-    for dev in candidates.iter() {
-        if std::path::Path::new(dev).exists() {
-            log::info!("TPM device detected: {}", dev);
-            return Some(dev.to_string());
-        }
-    }
-    log::warn!("No TPM device detected (checked TPM_DEVICE env, /dev/tpm0, and /dev/tpm1)");
-    None
 }

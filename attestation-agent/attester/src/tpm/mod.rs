@@ -6,10 +6,8 @@
 use super::{Attester, InitDataResult, TeeEvidence};
 pub mod utils;
 
-use self::utils::{
-    detect_tpm_device, extend_pcr, get_ak_handle, read_ak_public_key, read_all_pcrs,
-};
-use crate::tpm_utils::{get_quote, generate_rsa_ak, TpmQuote};
+use self::utils::{detect_tpm_device, extend_pcr, get_ak_handle, read_all_pcrs};
+use crate::tpm_utils::{generate_rsa_ak, get_quote, TpmQuote};
 use anyhow::{anyhow, Result};
 use base64::Engine;
 use log::info;
@@ -17,7 +15,6 @@ use serde::{Deserialize, Serialize};
 use tss_esapi::traits::Marshall;
 
 const PCR_SLOT_8: u64 = 8;
-const TPM_REPORT_DATA_SIZE: usize = 64;
 const TPM_HASH_ALGORITHM: &str = "SHA256";
 
 /// Evidence structure for the TPM Attester.
@@ -31,7 +28,6 @@ pub struct Evidence {
 #[derive(Debug, Default)]
 pub struct TpmAttester {
     tpm_device: String,
-    ak_handle_raw: u32,
 }
 
 impl TpmAttester {
@@ -49,7 +45,6 @@ impl TpmAttester {
         );
         Ok(Self {
             tpm_device,
-            ak_handle_raw,
         })
     }
 }

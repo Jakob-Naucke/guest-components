@@ -4,34 +4,21 @@
 //
 
 use anyhow::{anyhow, bail, Context, Result};
-use base64::Engine;
 use num_traits::cast::FromPrimitive;
-use serde::{Deserialize, Serialize};
 use std::env;
 use std::str::FromStr;
+use tss_esapi::abstraction::{pcr, public::DecodedKey};
 use tss_esapi::attributes::SessionAttributesBuilder;
 use tss_esapi::constants::SessionType;
 use tss_esapi::handles::{PcrHandle, TpmHandle};
 use tss_esapi::interface_types::algorithm::HashingAlgorithm;
 use tss_esapi::structures::digest_values::DigestValues;
 use tss_esapi::structures::{
-    pcr_selection_list::PcrSelectionListBuilder, pcr_slot::PcrSlot, AttestInfo, PcrSelectionList,
-    Signature, SignatureScheme as TpmSignatureScheme, SymmetricDefinition,
+    pcr_selection_list::PcrSelectionListBuilder, pcr_slot::PcrSlot, PcrSelectionList,
+    SymmetricDefinition,
 };
 use tss_esapi::tcti_ldr::TctiNameConf;
-use tss_esapi::traits::Marshall;
 use tss_esapi::Context as TssContext;
-use tss_esapi::{
-    abstraction::{pcr, public::DecodedKey},
-    structures::HashScheme,
-};
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct TpmQuote {
-    pub signature: String,
-    pub message: String,
-    pub pcrs: Vec<String>,
-}
 
 const TPM_DEFAULT_AK_HANDLE: u32 = 0x81010002;
 /// Environment variable to set a specific TPM device
@@ -161,52 +148,6 @@ pub fn read_all_pcrs(tpm_device: &str, algorithm: &str) -> Result<Vec<String>> {
         .into_iter()
         .map(|(_, digest)| Ok(hex::encode(digest.value())))
         .collect()
-}
-
-/// Function to generate a quote using a persistent AK handle
-pub fn get_quote(
-    tpm_device: &str,
-    ak_handle_raw: u32,
-    report_data: &[u8],
-    pcr_algorithm: &str,
-) -> Result<TpmQuote> {
-    let mut context = create_ctx_with_session(tpm_device)?;
-
-    // Create a KeyHandle object from ak_handle
-    let tpm_handle: TpmHandle = ak_handle_raw.try_into()?;
-    let ak_handle = context.tr_from_tpm_public(tpm_handle)?;
-
-    let selection_list = create_pcr_selection_list(pcr_algorithm)?;
-
-    let (attest, signature) = context
-        .quote(
-            ak_handle.into(),
-            report_data.to_vec().try_into()?,
-            TpmSignatureScheme::RsaSsa {
-                hash_scheme: HashScheme::new(HashingAlgorithm::Sha256),
-            },
-            selection_list.clone(),
-        )
-        .context(format!(
-            "TPM Quote API call failed for handle {:#X}",
-            ak_handle_raw
-        ))?;
-
-    let AttestInfo::Quote { .. } = attest.attested() else {
-        bail!("Get Quote failed");
-    };
-    let Signature::RsaSsa(_) = signature.clone() else {
-        bail!("Wrong Signature");
-    };
-
-    let engine = base64::engine::general_purpose::STANDARD;
-    drop(context);
-
-    Ok(TpmQuote {
-        signature: engine.encode(signature.marshall()?),
-        message: engine.encode(attest.marshall()?),
-        pcrs: read_all_pcrs(tpm_device, pcr_algorithm)?,
-    })
 }
 
 /// Function to read the public part of the AK from the persistent handle

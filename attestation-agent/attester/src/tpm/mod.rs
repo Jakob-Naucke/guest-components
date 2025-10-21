@@ -73,7 +73,7 @@ impl Attester for TpmAttester {
         };
         let attestation_key = generate_rsa_ak(&tpm_device)?;
         let public = attestation_key.ak_public.marshall()?;
-        let tpm_quote = get_quote(&tpm_device, attestation_key, data, "SHA256")?;
+        let tpm_quote = get_quote(&tpm_device, self.ak_handle_raw, data, "SHA256")?;
         let evidence = Evidence {
             tpm_quote,
             ak_public: base64::engine::general_purpose::STANDARD.encode(public),

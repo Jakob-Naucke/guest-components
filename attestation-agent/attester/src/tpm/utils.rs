@@ -194,21 +194,15 @@ pub fn generate_rsa_ak(tpm_device: &str) -> Result<AttestationKey> {
 /// Function to generate a quote using a persistent AK handle
 pub fn get_quote(
     tpm_device: &str,
-    attest_key: AttestationKey,
+    ak_handle_raw: u32,
     report_data: &[u8],
     pcr_algorithm: &str,
 ) -> Result<TpmQuote> {
     let mut context = create_ctx_with_session(tpm_device)?;
 
     // Create a KeyHandle object from ak_handle
-    let ek_handle = create_ek_object(&mut context, AsymmetricAlgorithm::Rsa, DefaultKey)?;
-    let ak_handle = load_ak(
-        &mut context,
-        ek_handle,
-        None,
-        attest_key.ak_private,
-        attest_key.ak_public,
-    )?;
+    let tpm_handle: TpmHandle = ak_handle_raw.try_into()?;
+    let ak_handle = context.tr_from_tpm_public(tpm_handle)?;
 
     let selection_list = create_pcr_selection_list(pcr_algorithm)?;
 
@@ -221,7 +215,10 @@ pub fn get_quote(
             },
             selection_list.clone(),
         )
-        .context("TPM Quote API call failed")?;
+        .context(format!(
+            "TPM Quote API call failed for handle {:#X}",
+            ak_handle_raw
+        ))?;
 
     let AttestInfo::Quote { .. } = attest.attested() else {
         bail!("Get Quote failed");

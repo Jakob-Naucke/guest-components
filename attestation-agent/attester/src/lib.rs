@@ -42,7 +42,6 @@ pub mod se;
 
 #[cfg(feature = "tpm-attester")]
 pub mod tpm;
-pub mod tpm_utils;
 
 pub type BoxedAttester = Box<dyn Attester + Send + Sync>;
 

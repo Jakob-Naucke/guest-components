@@ -9,20 +9,22 @@ use num_traits::cast::FromPrimitive;
 use serde::{Deserialize, Serialize};
 use std::env;
 use std::str::FromStr;
+use tss_esapi::abstraction::{ak::create_ak, ek::create_ek_object, DefaultKey};
 use tss_esapi::attributes::SessionAttributesBuilder;
 use tss_esapi::constants::SessionType;
 use tss_esapi::handles::{PcrHandle, TpmHandle};
 use tss_esapi::interface_types::algorithm::HashingAlgorithm;
+use tss_esapi::interface_types::algorithm::{AsymmetricAlgorithm, SignatureSchemeAlgorithm};
 use tss_esapi::structures::digest_values::DigestValues;
 use tss_esapi::structures::{
     pcr_selection_list::PcrSelectionListBuilder, pcr_slot::PcrSlot, AttestInfo, PcrSelectionList,
-    Signature, SignatureScheme as TpmSignatureScheme, SymmetricDefinition,
+    Private, Public, Signature, SignatureScheme as TpmSignatureScheme, SymmetricDefinition,
 };
 use tss_esapi::tcti_ldr::TctiNameConf;
 use tss_esapi::traits::Marshall;
 use tss_esapi::Context as TssContext;
 use tss_esapi::{
-    abstraction::{pcr, public::DecodedKey},
+    abstraction::{ak::load_ak, pcr, public::DecodedKey},
     structures::HashScheme,
 };
 
@@ -163,18 +165,50 @@ pub fn read_all_pcrs(tpm_device: &str, algorithm: &str) -> Result<Vec<String>> {
         .collect()
 }
 
+#[derive(Clone)]
+pub struct AttestationKey {
+    pub ak_private: Private,
+    pub ak_public: Public,
+}
+
+pub fn generate_rsa_ak(tpm_device: &str) -> Result<AttestationKey> {
+    let mut context = create_ctx_without_session(tpm_device)?;
+
+    let ek_handle = create_ek_object(&mut context, AsymmetricAlgorithm::Rsa, DefaultKey)?;
+
+    let ak = create_ak(
+        &mut context,
+        ek_handle,
+        HashingAlgorithm::Sha256,
+        SignatureSchemeAlgorithm::RsaSsa,
+        None,
+        DefaultKey,
+    )?;
+
+    Ok(AttestationKey {
+        ak_private: ak.out_private,
+        ak_public: ak.out_public,
+    })
+}
+
 /// Function to generate a quote using a persistent AK handle
 pub fn get_quote(
     tpm_device: &str,
-    ak_handle_raw: u32,
+    attest_key: AttestationKey,
     report_data: &[u8],
     pcr_algorithm: &str,
 ) -> Result<TpmQuote> {
     let mut context = create_ctx_with_session(tpm_device)?;
 
     // Create a KeyHandle object from ak_handle
-    let tpm_handle: TpmHandle = ak_handle_raw.try_into()?;
-    let ak_handle = context.tr_from_tpm_public(tpm_handle)?;
+    let ek_handle = create_ek_object(&mut context, AsymmetricAlgorithm::Rsa, DefaultKey)?;
+    let ak_handle = load_ak(
+        &mut context,
+        ek_handle,
+        None,
+        attest_key.ak_private,
+        attest_key.ak_public,
+    )?;
 
     let selection_list = create_pcr_selection_list(pcr_algorithm)?;
 
@@ -187,10 +221,7 @@ pub fn get_quote(
             },
             selection_list.clone(),
         )
-        .context(format!(
-            "TPM Quote API call failed for handle {:#X}",
-            ak_handle_raw
-        ))?;
+        .context("TPM Quote API call failed")?;
 
     let AttestInfo::Quote { .. } = attest.attested() else {
         bail!("Get Quote failed");

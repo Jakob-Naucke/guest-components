@@ -7,9 +7,9 @@ use super::{Attester, InitDataResult, TeeEvidence};
 pub mod utils;
 
 use self::utils::{
-    detect_tpm_device, extend_pcr, get_ak_handle, read_ak_public_key, read_all_pcrs,
+    detect_tpm_device, extend_pcr, generate_rsa_ak, get_ak_handle, get_quote, read_all_pcrs,
+    TpmQuote,
 };
-use crate::tpm_utils::{get_quote, generate_rsa_ak, TpmQuote};
 use anyhow::{anyhow, Result};
 use base64::Engine;
 use log::info;
@@ -71,9 +71,9 @@ impl Attester for TpmAttester {
         } else {
             &report_data
         };
-        let attestation_key = generate_rsa_ak()?;
+        let attestation_key = generate_rsa_ak(&tpm_device)?;
         let public = attestation_key.ak_public.marshall()?;
-        let tpm_quote = get_quote(attestation_key, data, "SHA256")?;
+        let tpm_quote = get_quote(&tpm_device, attestation_key, data, "SHA256")?;
         let evidence = Evidence {
             tpm_quote,
             ak_public: base64::engine::general_purpose::STANDARD.encode(public),
